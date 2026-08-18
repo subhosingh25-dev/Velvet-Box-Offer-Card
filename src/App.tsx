@@ -49,6 +49,44 @@ const FUNNY_HINGLISH_NOTIFICATIONS = [
   },
 ];
 
+// Play pleasant dual-tone bell chime for notifications
+function playNotificationSound() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    if (ctx.state === 'suspended') {
+      ctx.resume();
+    }
+    
+    // Note 1: 880Hz (A5)
+    const osc1 = ctx.createOscillator();
+    const gain1 = ctx.createGain();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(880, ctx.currentTime);
+    gain1.gain.setValueAtTime(0.2, ctx.currentTime);
+    gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+    osc1.start(ctx.currentTime);
+    osc1.stop(ctx.currentTime + 0.35);
+
+    // Note 2: 1318.5Hz (E6 bell overtone) slightly delayed
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(1318.5, ctx.currentTime + 0.1);
+    gain2.gain.setValueAtTime(0.25, ctx.currentTime + 0.1);
+    gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.55);
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    osc2.start(ctx.currentTime + 0.1);
+    osc2.stop(ctx.currentTime + 0.55);
+  } catch (e) {
+    // AudioContext fallback
+  }
+}
+
 export default function App() {
   // Select a random product on first visit and save its ID in localStorage
   // This guarantees device persistence - one time open per device, they keep their offer!
@@ -312,16 +350,20 @@ export default function App() {
     }
 
     const deliverSystemAlert = () => {
+      // Play audio notification chime
+      playNotificationSound();
+
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.ready.then((reg) => {
           reg.showNotification(title, {
             body: body,
             icon: 'https://ik.imagekit.io/84hq8peasx/Untitled%20design%20-%202026-07-08T112803.563.png',
             badge: 'https://ik.imagekit.io/84hq8peasx/Untitled%20design%20-%202026-07-08T112803.563.png',
-            vibrate: [300, 100, 300, 100, 300],
+            vibrate: [400, 150, 400, 150, 400],
             tag: 'velvetboxs-deal-' + Date.now(),
             renotify: true,
-            requireInteraction: true
+            requireInteraction: true,
+            silent: false
           } as any).catch(() => {
             new Notification(title, { body, icon: 'https://ik.imagekit.io/84hq8peasx/Untitled%20design%20-%202026-07-08T112803.563.png' });
           });

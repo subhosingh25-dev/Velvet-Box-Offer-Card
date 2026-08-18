@@ -1,4 +1,4 @@
-// VelvetBoxs Ultra-Reliable Service Worker for Background, Netlify, Periodic & Offline-to-Online Notifications
+// VelvetBoxs Ultra-Reliable Service Worker for Scheduled, Periodic, Offline & Background Notifications
 
 const FUNNY_HINGLISH_JOKES = [
   {
@@ -96,11 +96,51 @@ self.addEventListener('activate', (event) => {
         if (offer) {
           inMemoryOffer = offer;
           startIntervalTimer();
+          scheduleFutureNotifications(offer);
         }
       })
     ])
   );
 });
+
+// Schedule future OS-level notifications if TimestampTrigger is supported
+async function scheduleFutureNotifications(offer) {
+  if (!('showTrigger' in Notification.prototype) || typeof TimestampTrigger === 'undefined') {
+    return;
+  }
+
+  const baseNow = Date.now();
+  const intervalsMinutes = [5, 10, 15, 20, 25, 30, 45, 60, 90, 120];
+
+  for (let i = 0; i < intervalsMinutes.length; i++) {
+    const delayMinutes = intervalsMinutes[i];
+    const triggerTime = baseNow + delayMinutes * 60 * 1000;
+    const joke = FUNNY_HINGLISH_JOKES[i % FUNNY_HINGLISH_JOKES.length];
+    let body = joke.body;
+    if (offer && offer.code && !body.includes(offer.code)) {
+      body += ` (Code: ${offer.code})`;
+    }
+
+    try {
+      await self.registration.showNotification(joke.title, {
+        body: body,
+        icon: 'https://ik.imagekit.io/84hq8peasx/Untitled%20design%20-%202026-07-08T112803.563.png',
+        badge: 'https://ik.imagekit.io/84hq8peasx/Untitled%20design%20-%202026-07-08T112803.563.png',
+        vibrate: [400, 150, 400, 150, 400],
+        tag: `velvetboxs-scheduled-${delayMinutes}m`,
+        renotify: true,
+        requireInteraction: true,
+        showTrigger: new TimestampTrigger(triggerTime),
+        data: {
+          url: (offer && offer.url) ? offer.url : '/',
+          scheduledFor: triggerTime
+        }
+      });
+    } catch (e) {
+      console.log('TimestampTrigger scheduling error:', e);
+    }
+  }
+}
 
 // Trigger native phone system notification into device notification bar
 async function triggerDeviceNotification(customTitle, customBody, explicitOffer) {
@@ -124,7 +164,7 @@ async function triggerDeviceNotification(customTitle, customBody, explicitOffer)
     body: body,
     icon: 'https://ik.imagekit.io/84hq8peasx/Untitled%20design%20-%202026-07-08T112803.563.png',
     badge: 'https://ik.imagekit.io/84hq8peasx/Untitled%20design%20-%202026-07-08T112803.563.png',
-    vibrate: [300, 100, 300, 100, 300],
+    vibrate: [400, 150, 400, 150, 400],
     tag: 'velvetboxs-deal-' + Date.now(),
     renotify: true,
     requireInteraction: true,
@@ -173,6 +213,7 @@ self.addEventListener('message', (event) => {
     if (offer) {
       inMemoryOffer = offer;
       saveOfferToDB({ ...offer, lastNotifTime: Date.now() });
+      scheduleFutureNotifications(offer);
     }
 
     if (event.data.immediate) {
@@ -219,15 +260,12 @@ self.addEventListener('sync', (event) => {
 
 // Intercept fetch requests: Wakes up the SW when any network traffic occurs
 self.addEventListener('fetch', (event) => {
-  // Let the request pass through normally
   event.respondWith(
     fetch(event.request).catch(() => {
-      // Fallback for offline if necessary
       return new Response('Offline', { status: 503, statusText: 'Offline' });
     })
   );
 
-  // Background check if 5 mins passed
   event.waitUntil(checkAndSendPeriodicNotification());
 });
 
