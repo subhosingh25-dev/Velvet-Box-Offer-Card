@@ -1,0 +1,6 @@
+{
+  "name": "Velvet Box Promotional Offer",
+  "description": "An interactive digital scratch card revealing special discounts and promotional codes for Velvet Box.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
