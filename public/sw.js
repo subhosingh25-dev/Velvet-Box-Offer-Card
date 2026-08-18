@@ -1,4 +1,5 @@
-// VelvetBoxs Service Worker for Background, Periodic & Offline-to-Online Notifications
+// VelvetBoxs Ultra-Reliable Service Worker for Background, Netlify, Periodic & Offline-to-Online Notifications
+
 const FUNNY_HINGLISH_JOKES = [
   {
     title: "Crush nahi hai jo ignore karoge! 😜",
@@ -30,7 +31,56 @@ const FUNNY_HINGLISH_JOKES = [
   }
 ];
 
-let activeOffer = null;
+const DB_NAME = 'VelvetBoxsNotificationsDB';
+const DB_VERSION = 1;
+const STORE_NAME = 'offer_state';
+
+// IndexedDB Helper for persistent storage across browser terminations and device reboots
+function openDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveOfferToDB(offerData) {
+  try {
+    const db = await openDatabase();
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    store.put({ id: 'active_offer', ...offerData, updatedAt: Date.now() });
+    return new Promise((resolve) => {
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    });
+  } catch (e) {
+    console.warn('IDB Save Error in SW:', e);
+  }
+}
+
+async function getOfferFromDB() {
+  try {
+    const db = await openDatabase();
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const req = store.get('active_offer');
+    return new Promise((resolve) => {
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  } catch (e) {
+    return null;
+  }
+}
+
+let inMemoryOffer = null;
 let intervalId = null;
 let jokeIndex = 0;
 
@@ -39,37 +89,79 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    Promise.all([
+      self.clients.claim(),
+      getOfferFromDB().then((offer) => {
+        if (offer) {
+          inMemoryOffer = offer;
+          startIntervalTimer();
+        }
+      })
+    ])
+  );
 });
 
-// Function to trigger native background notification with rotating funny joke
-function sendFunnyOfferNotification(customTitle, customBody) {
+// Trigger native phone system notification into device notification bar
+async function triggerDeviceNotification(customTitle, customBody, explicitOffer) {
+  const offer = explicitOffer || inMemoryOffer || (await getOfferFromDB());
   const joke = FUNNY_HINGLISH_JOKES[jokeIndex % FUNNY_HINGLISH_JOKES.length];
   jokeIndex++;
 
   const title = customTitle || joke.title;
   let body = customBody || joke.body;
 
-  if (activeOffer && activeOffer.code && !body.includes(activeOffer.code)) {
-    body += ` (Code: ${activeOffer.code})`;
+  if (offer && offer.code && !body.includes(offer.code)) {
+    body += ` (Code: ${offer.code})`;
   }
 
-  return self.registration.showNotification(title, {
+  // Update last notification time in DB
+  if (offer) {
+    saveOfferToDB({ ...offer, lastNotifTime: Date.now() });
+  }
+
+  const notificationOptions = {
     body: body,
     icon: 'https://ik.imagekit.io/84hq8peasx/Untitled%20design%20-%202026-07-08T112803.563.png',
     badge: 'https://ik.imagekit.io/84hq8peasx/Untitled%20design%20-%202026-07-08T112803.563.png',
     vibrate: [300, 100, 300, 100, 300],
-    tag: 'velvetboxs-funny-deal-' + Date.now(),
+    tag: 'velvetboxs-deal-' + Date.now(),
     renotify: true,
     requireInteraction: true,
+    silent: false,
     actions: [
       { action: 'claim', title: '🎁 Claim 50% OFF' },
       { action: 'open', title: '👀 View Deal' }
     ],
     data: {
-      url: (activeOffer && activeOffer.url) ? activeOffer.url : '/'
+      url: (offer && offer.url) ? offer.url : '/',
+      timestamp: Date.now()
     }
-  });
+  };
+
+  return self.registration.showNotification(title, notificationOptions);
+}
+
+function startIntervalTimer() {
+  if (intervalId) clearInterval(intervalId);
+  // Send notification every 5 minutes (300,000 ms)
+  intervalId = setInterval(() => {
+    triggerDeviceNotification();
+  }, 5 * 60 * 1000);
+}
+
+// Check if 5 minutes have elapsed since the last notification
+async function checkAndSendPeriodicNotification() {
+  const offer = inMemoryOffer || (await getOfferFromDB());
+  if (!offer) return;
+
+  const now = Date.now();
+  const lastTime = offer.lastNotifTime || 0;
+  const FIVE_MINUTES = 5 * 60 * 1000;
+
+  if (now - lastTime >= FIVE_MINUTES) {
+    await triggerDeviceNotification(null, null, offer);
+  }
 }
 
 // Listen to messages from App.tsx
@@ -77,43 +169,47 @@ self.addEventListener('message', (event) => {
   if (!event.data) return;
 
   if (event.data.type === 'START_BACKGROUND_NOTIFICATIONS') {
-    activeOffer = event.data.offer || activeOffer;
+    const offer = event.data.offer;
+    if (offer) {
+      inMemoryOffer = offer;
+      saveOfferToDB({ ...offer, lastNotifTime: Date.now() });
+    }
 
-    // Send immediate funny notification
     if (event.data.immediate) {
-      sendFunnyOfferNotification(
+      triggerDeviceNotification(
         event.data.title || "🎉 50% OFF Unlocked! Mauka mat chhodna!",
-        event.data.body || (activeOffer ? `"${activeOffer.productName}" pe 50% discount active ho gaya hai! Use Code: ${activeOffer.code}` : undefined)
+        event.data.body || (offer ? `"${offer.productName}" pe 50% discount active ho gaya hai! Use Code: ${offer.code}` : undefined),
+        offer
       );
     }
 
-    // Set repeating interval (every 5 minutes = 300,000 ms)
-    if (intervalId) clearInterval(intervalId);
-    intervalId = setInterval(() => {
-      sendFunnyOfferNotification();
-    }, 5 * 60 * 1000); // Every 5 minutes
+    startIntervalTimer();
   }
 
   if (event.data.type === 'ONLINE_TRIGGER') {
-    sendFunnyOfferNotification(
-      "🌐 Arey waah, Internet ON ho gaya!",
-      "Phone chala hi rahe ho toh fatafat VelvetBoxs ka 50% discount claim karlo! 😜💨"
+    triggerDeviceNotification(
+      "🌐 Arey waah, Internet ON ho gaya! 😜",
+      "Phone chala hi rahe ho toh fatafat VelvetBoxs pe 50% discount claim karlo! Mauka mat jaane do 🏃‍♂️💨"
     );
   }
-});
 
-// Periodic background sync if available on mobile Chrome/Android
-self.addEventListener('periodicsync', (event) => {
-  if (event.tag === 'velvetboxs-offer-reminder') {
-    event.waitUntil(sendFunnyOfferNotification());
+  if (event.data.type === 'CHECK_NOTIFICATION') {
+    checkAndSendPeriodicNotification();
   }
 });
 
-// Sync event (fires when connectivity is restored or background sync is triggered)
+// Periodic background sync (available in Chrome/Android PWA)
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag === 'velvetboxs-offer-reminder' || event.tag === 'velvetboxs-5min-sync') {
+    event.waitUntil(checkAndSendPeriodicNotification());
+  }
+});
+
+// Sync event (fires when connectivity is restored or background sync fires)
 self.addEventListener('sync', (event) => {
-  if (event.tag === 'velvetboxs-online-sync') {
+  if (event.tag === 'velvetboxs-online-sync' || event.tag === 'velvetboxs-reminder-sync') {
     event.waitUntil(
-      sendFunnyOfferNotification(
+      triggerDeviceNotification(
         "🌐 Internet Connected! Deal Alert 🎁",
         "Aapka 50% off coupon code active hai! Jaldi se apna favourite jewellery book karo."
       )
@@ -121,7 +217,40 @@ self.addEventListener('sync', (event) => {
   }
 });
 
-// Notification Click Handler
+// Intercept fetch requests: Wakes up the SW when any network traffic occurs
+self.addEventListener('fetch', (event) => {
+  // Let the request pass through normally
+  event.respondWith(
+    fetch(event.request).catch(() => {
+      // Fallback for offline if necessary
+      return new Response('Offline', { status: 503, statusText: 'Offline' });
+    })
+  );
+
+  // Background check if 5 mins passed
+  event.waitUntil(checkAndSendPeriodicNotification());
+});
+
+// Push event fallback if web push is sent
+self.addEventListener('push', (event) => {
+  let data = {};
+  if (event.data) {
+    try {
+      data = event.data.json();
+    } catch (e) {
+      data = { body: event.data.text() };
+    }
+  }
+
+  event.waitUntil(
+    triggerDeviceNotification(
+      data.title || "🎁 VelvetBoxs 50% OFF Surprise!",
+      data.body || undefined
+    )
+  );
+});
+
+// Notification Click Handler - Focuses window or opens product URL in browser
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
@@ -130,7 +259,7 @@ self.addEventListener('notificationclick', (event) => {
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {
-        if (client.url.includes(self.location.origin) && 'focus' in client) {
+        if (client.url && client.url.includes(self.location.origin) && 'focus' in client) {
           return client.focus();
         }
       }

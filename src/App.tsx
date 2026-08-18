@@ -125,9 +125,28 @@ export default function App() {
   // Register service worker on mount for native phone notification delivery and background tasking
   useEffect(() => {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js')
-        .then((reg) => {
+      navigator.serviceWorker.register('/sw.js', { scope: '/' })
+        .then(async (reg) => {
           console.log('Service Worker registered successfully:', reg);
+          
+          // Register Periodic Sync if supported by mobile Chrome/PWA
+          if ('periodicSync' in reg) {
+            try {
+              await (reg as any).periodicSync.register('velvetboxs-offer-reminder', {
+                minInterval: 5 * 60 * 1000,
+              });
+            } catch (e) {
+              console.log('Periodic sync registration optional:', e);
+            }
+          }
+
+          // Register Background Sync for offline-to-online triggers
+          if ('sync' in reg) {
+            try {
+              await (reg as any).sync.register('velvetboxs-online-sync');
+            } catch (e) {}
+          }
+
           const alreadyRevealed = isCardRevealed || localStorage.getItem('velvet_scratch_card_revealed') === 'true';
           if (alreadyRevealed) {
             navigator.serviceWorker.ready.then((readyReg) => {
@@ -217,6 +236,43 @@ export default function App() {
     }, 5 * 60 * 1000); // 5 minutes
 
     return () => clearInterval(interval);
+  }, [isCardRevealed, assignedProduct]);
+
+  // Listen for Tab Visibility & Device Screen Wakeup to immediately check and trigger alert
+  useEffect(() => {
+    const handleVisibilityOrFocus = () => {
+      const alreadyRevealed = isCardRevealed || localStorage.getItem('velvet_scratch_card_revealed') === 'true';
+      if (alreadyRevealed && document.visibilityState === 'visible') {
+        const lastNotifStr = localStorage.getItem('velvet_last_notif_time');
+        const lastNotif = lastNotifStr ? parseInt(lastNotifStr, 10) : 0;
+        const now = Date.now();
+
+        // If at least 5 minutes passed since user was away
+        if (now - lastNotif >= 5 * 60 * 1000) {
+          localStorage.setItem('velvet_last_notif_time', now.toString());
+          const randomJoke = FUNNY_HINGLISH_NOTIFICATIONS[Math.floor(Math.random() * FUNNY_HINGLISH_NOTIFICATIONS.length)];
+          const bodyWithCode = `${randomJoke.body} Use Code: ${assignedProduct.code}`;
+          triggerNativePhoneNotification(randomJoke.title, bodyWithCode);
+          setToastMessage({
+            title: randomJoke.title,
+            body: bodyWithCode
+          });
+          setShowNotification(true);
+        }
+
+        // Notify SW to run background check
+        if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+          navigator.serviceWorker.controller.postMessage({ type: 'CHECK_NOTIFICATION' });
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+    };
   }, [isCardRevealed, assignedProduct]);
 
   // Listen for Internet ON (Online Event) to trigger extra funny notifications
@@ -550,6 +606,34 @@ export default function App() {
             <Share2 className="w-3.5 h-3.5 text-purple-600" />
             <span>Share With Friends</span>
           </button>
+
+          {/* Direct System / Phone Notification Bar Permission Trigger */}
+          {isCardRevealed && notificationPermission !== 'granted' && (
+            <button
+              onClick={async () => {
+                if ('Notification' in window) {
+                  try {
+                    const perm = await Notification.requestPermission();
+                    setNotificationPermission(perm);
+                    if (perm === 'granted') {
+                      const testJoke = FUNNY_HINGLISH_NOTIFICATIONS[0];
+                      const bodyWithCode = `${testJoke.body} Use Code: ${assignedProduct.code}`;
+                      triggerNativePhoneNotification(testJoke.title, bodyWithCode);
+                      setShareToast('🔔 Phone Notification Bar Alerts Enabled!');
+                      setTimeout(() => setShareToast(null), 3500);
+                    }
+                  } catch (e) {
+                    console.warn('Permission error:', e);
+                  }
+                }
+              }}
+              className="mt-1 text-[11px] font-bold text-purple-800 hover:text-purple-950 flex items-center gap-1.5 bg-purple-100/80 hover:bg-purple-200/90 px-3.5 py-1.5 rounded-full transition-all border border-purple-300/80 shadow-xs cursor-pointer active:scale-95"
+              id="enable-phone-notifications-button"
+            >
+              <Bell className="w-3.5 h-3.5 text-purple-600 animate-pulse" />
+              <span>Allow Phone Notification Bar Alerts</span>
+            </button>
+          )}
         </div>
 
         {/* Footer Area */}
