@@ -62,6 +62,10 @@ function sendFunnyOfferNotification(customTitle, customBody) {
     tag: 'velvetboxs-funny-deal-' + Date.now(),
     renotify: true,
     requireInteraction: true,
+    actions: [
+      { action: 'claim', title: '🎁 Claim 50% OFF' },
+      { action: 'open', title: '👀 View Deal' }
+    ],
     data: {
       url: (activeOffer && activeOffer.url) ? activeOffer.url : '/'
     }
