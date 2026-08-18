@@ -17,6 +17,38 @@ interface TimeLeft {
   seconds: number;
 }
 
+// Hilarious Hinglish notification jokes and urgency lines
+const FUNNY_HINGLISH_NOTIFICATIONS = [
+  {
+    title: "Crush nahi hai jo ignore karoge! 😜",
+    body: "Bhai 50% discount wait kar raha hai! Jaldi order karo coupon code use karke. 💍",
+  },
+  {
+    title: "Mummy ki bargaining se bhi zyada discount! 😂",
+    body: "Flat 50% OFF mil raha hai VelvetBoxs pe! Mauka haath se mat jaane do.",
+  },
+  {
+    title: "Shona ko gift kab de rahe ho? 🎁",
+    body: "50% OFF chal raha hai, baad me mehenga padega toh mat bolna! 🏃‍♂️",
+  },
+  {
+    title: "Padosi ko mat batana! 🤫",
+    body: "Chupke se apna 50% discount jewellery order kar lo. Exclusive deal zindabad!",
+  },
+  {
+    title: "5-Star hotel ki chai se sasta discount! ☕",
+    body: "Itna bhari 50% off chhoot gaya toh bohot pachtaoge dost! ⏳",
+  },
+  {
+    title: "Dost ko batane se pehle khud le lo! 🏃‍♂️💨",
+    body: "VelvetBoxs ka 50% OFF offer timer chal raha hai! Abhi claim karo.",
+  },
+  {
+    title: "Zindagi me mauke baar baar nahi aate! 💎",
+    body: "Arey abhi bhi soch rahe ho? 50% discount code active hai, tap karke khareedo!",
+  },
+];
+
 export default function App() {
   // Select a random product on first visit and save its ID in localStorage
   // This guarantees device persistence - one time open per device, they keep their offer!
@@ -73,6 +105,12 @@ export default function App() {
   // Track app push-style notification visibility
   const [showNotification, setShowNotification] = useState(false);
 
+  // Track dynamic toast content with funny Hinglish jokes
+  const [toastMessage, setToastMessage] = useState(() => ({
+    title: "Crush nahi hai jo ignore karoge! 😜",
+    body: `Bhai 50% discount wait kar raha hai! Jaldi order karo coupon code use karke. 💍`
+  }));
+
   // Track share feedback toast
   const [shareToast, setShareToast] = useState<string | null>(null);
 
@@ -84,18 +122,34 @@ export default function App() {
     return 'denied';
   });
 
-  // Register service worker on mount for native phone notification delivery
+  // Register service worker on mount for native phone notification delivery and background tasking
   useEffect(() => {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js')
         .then((reg) => {
-          console.log('Service Worker registered successfully for native alerts:', reg);
+          console.log('Service Worker registered successfully:', reg);
+          const alreadyRevealed = isCardRevealed || localStorage.getItem('velvet_scratch_card_revealed') === 'true';
+          if (alreadyRevealed) {
+            navigator.serviceWorker.ready.then((readyReg) => {
+              if (readyReg.active) {
+                readyReg.active.postMessage({
+                  type: 'START_BACKGROUND_NOTIFICATIONS',
+                  offer: {
+                    productName: assignedProduct.name,
+                    code: assignedProduct.code,
+                    url: assignedProduct.url
+                  },
+                  immediate: false
+                });
+              }
+            });
+          }
         })
         .catch((err) => {
           console.warn('Service worker registration failed:', err);
         });
     }
-  }, []);
+  }, [isCardRevealed, assignedProduct]);
 
   // Setup live countdown interval
   useEffect(() => {
@@ -133,13 +187,66 @@ export default function App() {
   // Show internal app notification when page loads if offer is already active
   useEffect(() => {
     if (expiryTime && expiryTime > Date.now()) {
-      // Small delay for better UX entrance
       const timeout = setTimeout(() => {
+        const randomJoke = FUNNY_HINGLISH_NOTIFICATIONS[Math.floor(Math.random() * FUNNY_HINGLISH_NOTIFICATIONS.length)];
+        setToastMessage({
+          title: randomJoke.title,
+          body: `${randomJoke.body} (Code: ${assignedProduct.code})`
+        });
         setShowNotification(true);
       }, 1500);
       return () => clearTimeout(timeout);
     }
-  }, [expiryTime]);
+  }, [expiryTime, assignedProduct]);
+
+  // Periodic reminder: Send funny notifications every 5 minutes (300,000 ms)
+  useEffect(() => {
+    const alreadyRevealed = isCardRevealed || localStorage.getItem('velvet_scratch_card_revealed') === 'true';
+    if (!alreadyRevealed) return;
+
+    const interval = setInterval(() => {
+      const randomJoke = FUNNY_HINGLISH_NOTIFICATIONS[Math.floor(Math.random() * FUNNY_HINGLISH_NOTIFICATIONS.length)];
+      const bodyWithCode = `${randomJoke.body} Use Code: ${assignedProduct.code}`;
+
+      triggerNativePhoneNotification(randomJoke.title, bodyWithCode);
+      setToastMessage({
+        title: randomJoke.title,
+        body: bodyWithCode
+      });
+      setShowNotification(true);
+    }, 5 * 60 * 1000); // 5 minutes
+
+    return () => clearInterval(interval);
+  }, [isCardRevealed, assignedProduct]);
+
+  // Listen for Internet ON (Online Event) to trigger extra funny notifications
+  useEffect(() => {
+    const handleOnline = () => {
+      const alreadyRevealed = isCardRevealed || localStorage.getItem('velvet_scratch_card_revealed') === 'true';
+      if (alreadyRevealed) {
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.ready.then((reg) => {
+            if (reg.active) {
+              reg.active.postMessage({ type: 'ONLINE_TRIGGER' });
+            }
+          });
+        }
+
+        const onlineTitle = "🌐 Arey waah, Internet ON ho gaya! 😜";
+        const onlineBody = `Phone chala hi rahe ho toh fatafat "${assignedProduct.name}" pe 50% discount claim karlo! Code: ${assignedProduct.code}`;
+
+        triggerNativePhoneNotification(onlineTitle, onlineBody);
+        setToastMessage({
+          title: onlineTitle,
+          body: onlineBody
+        });
+        setShowNotification(true);
+      }
+    };
+
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, [isCardRevealed, assignedProduct]);
 
   // Trigger standard HTML5 / Service Worker native phone system notification
   const triggerNativePhoneNotification = (title: string, body: string) => {
@@ -149,19 +256,17 @@ export default function App() {
     }
 
     const deliverSystemAlert = () => {
-      // Try utilizing service worker first so it stays active even when browser is backgrounded/minimized
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.ready.then((reg) => {
           reg.showNotification(title, {
             body: body,
             icon: 'https://ik.imagekit.io/84hq8peasx/Untitled%20design%20-%202026-07-08T112803.563.png',
             badge: 'https://ik.imagekit.io/84hq8peasx/Untitled%20design%20-%202026-07-08T112803.563.png',
-            vibrate: [300, 100, 300],
-            tag: 'velvetboxs-countdown-alert',
+            vibrate: [300, 100, 300, 100, 300],
+            tag: 'velvetboxs-deal-' + Date.now(),
             renotify: true,
             requireInteraction: true
-          } as any).catch((err) => {
-            // Direct fallback
+          } as any).catch(() => {
             new Notification(title, { body, icon: 'https://ik.imagekit.io/84hq8peasx/Untitled%20design%20-%202026-07-08T112803.563.png' });
           });
         });
@@ -185,29 +290,7 @@ export default function App() {
     }
   };
 
-  // Explicit action for manual permission click
-  const requestPhoneNotificationPermission = async () => {
-    if (!('Notification' in window)) {
-      alert('Your browser does not support phone notifications. Please open in a native browser like Chrome or Safari.');
-      return;
-    }
-
-    try {
-      const permission = await Notification.requestPermission();
-      setNotificationPermission(permission);
-      if (permission === 'granted') {
-        // Trigger a friendly native confirmation alert immediately on their phone
-        triggerNativePhoneNotification(
-          '🔔 VelvetBoxs Alerts Activated!',
-          `Awesome! We'll alert you on your phone before your exclusive 50% offer expires!`
-        );
-      }
-    } catch (err) {
-      console.warn('Notification permission request failed:', err);
-    }
-  };
-
-  // Set 5-day countdown start when scratch card is successfully revealed
+  // Set 5-day countdown start and trigger notifications when scratch card is revealed
   const handleReveal = () => {
     setIsCardRevealed(true);
     if (expiryTime) return; // Already running
@@ -220,14 +303,42 @@ export default function App() {
       console.warn('Error saving expiry time to localStorage', e);
     }
 
-    // Immediately trigger gorgeous iOS/Android style internal notification toast
+    const firstJoke = FUNNY_HINGLISH_NOTIFICATIONS[0];
+    const initialBody = `Bhai "${assignedProduct.name}" pe 50% discount unlocked hai! Code: ${assignedProduct.code}`;
+    setToastMessage({
+      title: firstJoke.title,
+      body: initialBody
+    });
     setShowNotification(true);
 
-    // Try triggering a real device/system alert push notification in their notification bar
-    triggerNativePhoneNotification(
-      '🎁 50% Off Offer Activated!',
-      `Exclusive 50% off on "${assignedProduct.name}" is unlocked! Claim it within 5 days.`
-    );
+    // Request notification permission and trigger first alert immediately
+    if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+      Notification.requestPermission().then((permission) => {
+        setNotificationPermission(permission);
+        if (permission === 'granted') {
+          triggerNativePhoneNotification(firstJoke.title, initialBody);
+        }
+      });
+    } else {
+      triggerNativePhoneNotification(firstJoke.title, initialBody);
+    }
+
+    // Start background loop in Service Worker
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready.then((reg) => {
+        if (reg.active) {
+          reg.active.postMessage({
+            type: 'START_BACKGROUND_NOTIFICATIONS',
+            offer: {
+              productName: assignedProduct.name,
+              code: assignedProduct.code,
+              url: assignedProduct.url
+            },
+            immediate: true
+          });
+        }
+      });
+    }
   };
 
   // Web Share API handler with fresh Scratch & Win link (each friend gets their own surprise offer)
@@ -312,11 +423,11 @@ export default function App() {
                 </span>
                 <span className="text-[9px] text-zinc-400 font-medium">Just now</span>
               </div>
-              <h4 className="text-[11px] font-black text-zinc-900 mt-1 uppercase tracking-wide">
-                Offer Active: 5 Days Left!
+              <h4 className="text-[11px] font-black text-purple-950 mt-1 uppercase tracking-wide">
+                {toastMessage.title}
               </h4>
-              <p className="text-[10px] text-zinc-500 leading-relaxed font-medium mt-0.5">
-                Your 50% discount on "{assignedProduct.name}" is locked in! Tap below to use it before it expires.
+              <p className="text-[10px] text-zinc-600 leading-relaxed font-medium mt-0.5">
+                {toastMessage.body}
               </p>
               
               <div className="mt-2.5 flex items-center gap-2">
