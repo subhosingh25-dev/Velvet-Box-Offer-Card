@@ -10,6 +10,12 @@ import { Gift, Clock, Bell, Sparkles, X, Check, Share2 } from 'lucide-react';
 import { PRODUCTS } from './data/products';
 import { motion, AnimatePresence } from 'motion/react';
 
+declare global {
+  interface Window {
+    OneSignalDeferred?: any[];
+  }
+}
+
 interface TimeLeft {
   days: number;
   hours: number;
@@ -207,6 +213,29 @@ export default function App() {
         });
     }
   }, [isCardRevealed, assignedProduct]);
+
+  // Initialize OneSignal for background OS-level Cloud Web Push on Netlify & mobile browsers
+  useEffect(() => {
+    const appId = (import.meta as any).env?.VITE_ONESIGNAL_APP_ID || '';
+    if (typeof window !== 'undefined' && appId) {
+      window.OneSignalDeferred = window.OneSignalDeferred || [];
+      window.OneSignalDeferred.push(async (OneSignal: any) => {
+        try {
+          await OneSignal.init({
+            appId: appId,
+            serviceWorkerPath: '/OneSignalSDKWorker.js',
+            serviceWorkerParam: { scope: '/' },
+            allowLocalhostAsSecureOrigin: true,
+            notifyButton: {
+              enable: false,
+            },
+          });
+        } catch (e) {
+          console.log('OneSignal init notice:', e);
+        }
+      });
+    }
+  }, []);
 
   // Setup live countdown interval
   useEffect(() => {
@@ -434,6 +463,26 @@ export default function App() {
             },
             immediate: true
           });
+        }
+      });
+    }
+
+    // Register User with OneSignal for OS-level background cloud notifications
+    if (typeof window !== 'undefined' && window.OneSignalDeferred) {
+      window.OneSignalDeferred.push(async (OneSignal: any) => {
+        try {
+          if (OneSignal.Notifications && OneSignal.Notifications.requestPermission) {
+            await OneSignal.Notifications.requestPermission();
+          }
+          if (OneSignal.User && OneSignal.User.addTags) {
+            await OneSignal.User.addTags({
+              offer_unlocked: 'true',
+              promo_code: assignedProduct.code,
+              product_title: assignedProduct.name
+            });
+          }
+        } catch (e) {
+          console.log('OneSignal permission prompt note:', e);
         }
       });
     }
